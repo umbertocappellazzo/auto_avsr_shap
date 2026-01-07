@@ -62,6 +62,7 @@ class AVDataset(torch.utils.data.Dataset):
         paths_counts_labels = []
         for path_count_label in open(label_path).read().splitlines():
             dataset_name, rel_path, input_length, token_id = path_count_label.split(",")
+            rel_path = rel_path.replace("lrs3_video_seg16s", "lrs3_video_seg24s")
             paths_counts_labels.append(
                 (
                     dataset_name,
