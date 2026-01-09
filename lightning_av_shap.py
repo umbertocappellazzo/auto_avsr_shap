@@ -26,227 +26,6 @@ from espnet.nets.pytorch_backend.transformer.mask import target_mask
 def compute_word_level_distance(seq1, seq2):
     return torchaudio.functional.edit_distance(seq1.lower().split(), seq2.lower().split())
 
-
-def forward_shap_autoavsr(self, sample, nsamples=2000, shap_alg="kernel"):
-    """
-    Compute SHAP values for Auto-AVSR (decoder-only).
-    
-    Args:
-        sample: Single test sample containing 'video', 'audio', 'target'
-        nsamples: Number of SHAP samples (default 2000)
-        shap_alg: SHAP algorithm ('kernel' or 'permutation')
-    
-    Returns:
-        audio_pct_abs, video_pct_abs: Absolute SHAP contributions
-        audio_pct_pos, video_pct_pos: Positive SHAP contributions
-        audio_pct_neg, video_pct_neg: Negative SHAP contributions
-    """
-    
-    device = self.device
-    
-    # 1) Encode audio and video
-    video = sample["video"].unsqueeze(0).to(device)
-    audio = sample["audio"].unsqueeze(0).to(device)
-    
-    with torch.no_grad():
-        video_feat, _ = self.model.encoder(video, None)
-        audio_feat, _ = self.model.aux_encoder(audio, None)
-    
-    B, T_v, D_v = video_feat.shape
-    B, T_a, D_a = audio_feat.shape
-    
-    assert T_v == T_a, f"Video ({T_v}) and audio ({T_a}) must be temporally aligned!"
-    T = T_v
-    
-    # Define feature order (must match concatenation order)
-    N_v = T  # Video timesteps (first in concatenation)
-    N_a = T  # Audio timesteps (second in concatenation)
-    p = N_v + N_a  # Total features
-    
-    # Store for wrapper
-    self.video_feat_full = video_feat
-    self.audio_feat_full = audio_feat
-    
-    # 2) Generate baseline using decoder-only beam search
-    concat_full = torch.cat([video_feat, audio_feat], dim=-1)
-    memory_full = self.model.fusion(concat_full)
-    
-    if self.model.proj_decoder:
-        memory_full = self.model.proj_decoder(memory_full)
-    
-    with torch.no_grad():
-        beam_search = get_beam_search_decoder(
-            self.model,
-            self.token_list,
-            ctc_weight=0.0,
-            beam_size=40
-        )
-        
-        nbest_hyps = beam_search(memory_full.squeeze(0))
-        nbest_hyps = [h.asdict() for h in nbest_hyps[:min(len(nbest_hyps), 1)]]
-        baseline_token_ids = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
-    
-    self.baseline_token_ids = baseline_token_ids
-    
-    # Safety check
-    if len(baseline_token_ids) == 0:
-        raise ValueError("Baseline generation failed: no tokens generated")
-    
-    # 3) SHAP computation
-    background = np.zeros((1, p), dtype=np.float32)
-    x_explain = np.ones((1, p), dtype=np.float32)
-    
-    def shap_model(masks):
-        return self.shap_wrapper_autoavsr(masks)
-    
-    if shap_alg == "kernel":
-        explainer = shap.SamplingExplainer(
-            model=shap_model,
-            data=background
-        )
-        shap_values = explainer.shap_values(x_explain, nsamples=nsamples)
-        
-    elif shap_alg == "permutation":
-        from shap.maskers import Independent
-        masker = Independent(background, max_samples=100)
-        
-        explainer = shap.PermutationExplainer(
-            model=shap_model,
-            masker=masker,
-            algorithm='auto'
-        )
-        shap_obj = explainer(x_explain, max_evals=nsamples, silent=True)
-        shap_values = shap_obj.values
-    
-    else:
-        raise ValueError(f"Unknown SHAP algorithm: {shap_alg}")
-    
-    # Process SHAP output
-    if isinstance(shap_values, list):
-        shap_values = shap_values[0]
-    
-    shap_values = np.array(shap_values)
-    if shap_values.ndim == 3:
-        shap_values = shap_values[0]
-    
-    vals = shap_values  # (p, T_out)
-    
-    # 4) Compute contributions
-    # Absolute SHAP
-    mm_raw_abs = np.sum(np.abs(vals), axis=1)
-    mm_video_abs = mm_raw_abs[:N_v].sum()
-    mm_audio_abs = mm_raw_abs[N_v:].sum()
-    total_abs = mm_audio_abs + mm_video_abs
-    
-    audio_pct_abs = mm_audio_abs / total_abs
-    video_pct_abs = mm_video_abs / total_abs
-    
-    # Positive SHAP
-    mm_raw_pos = np.sum(np.maximum(vals, 0), axis=1)
-    mm_video_pos = mm_raw_pos[:N_v].sum()
-    mm_audio_pos = mm_raw_pos[N_v:].sum()
-    total_pos = mm_audio_pos + mm_video_pos
-    
-    audio_pct_pos = mm_audio_pos / total_pos
-    video_pct_pos = mm_video_pos / total_pos
-    
-    # Negative SHAP
-    mm_raw_neg = np.sum(np.minimum(vals, 0), axis=1)
-    mm_video_neg = abs(mm_raw_neg[:N_v].sum())
-    mm_audio_neg = abs(mm_raw_neg[N_v:].sum())
-    total_neg = mm_audio_neg + mm_video_neg
-    
-    audio_pct_neg = mm_audio_neg / total_neg
-    video_pct_neg = mm_video_neg / total_neg
-    
-    # Print results
-    print(f"Audio contribution (absolute): {audio_pct_abs*100:.2f}%")
-    print(f"Video contribution (absolute): {video_pct_abs*100:.2f}%")
-    print(f"Audio contribution (positive): {audio_pct_pos*100:.2f}%")
-    print(f"Video contribution (positive): {video_pct_pos*100:.2f}%")
-    print(f"Audio contribution (negative): {audio_pct_neg*100:.2f}%")
-    print(f"Video contribution (negative): {video_pct_neg*100:.2f}%")
-    
-    return audio_pct_abs, video_pct_abs, \
-           audio_pct_pos, video_pct_pos, \
-           audio_pct_neg, video_pct_neg
-
-def shap_wrapper_autoavsr(self, masks):
-    """
-    SHAP wrapper for evaluating coalitions.
-    
-    Args:
-        masks: (n_coalitions, p) where p = N_v + N_a
-               First N_v elements: video timestep masks
-               Last N_a elements: audio timestep masks
-    
-    Returns:
-        results: (n_coalitions, T_out) logits for baseline tokens
-    """
-    if masks.ndim == 1:
-        masks = masks.reshape(1, -1)
-    
-    n_coalitions = masks.shape[0]
-    device = self.device
-    
-    T = self.video_feat_full.shape[1]
-    N_v = T  # Video timesteps (first in mask)
-    N_a = T  # Audio timesteps (second in mask)
-    
-    results = []
-    
-    for i in range(n_coalitions):
-        mask = masks[i]
-        
-        # Split mask (order: video first, audio second)
-        mask_video = mask[:N_v]
-        mask_audio = mask[N_v:]
-        
-        # Clone and mask features
-        audio_feat_masked = self.audio_feat_full.clone()
-        video_feat_masked = self.video_feat_full.clone()
-        
-        for t in range(T):
-            if mask_video[t] == 0:
-                video_feat_masked[:, t, :] = 0
-            if mask_audio[t] == 0:
-                audio_feat_masked[:, t, :] = 0
-        
-        # Concatenate (video first, audio second)
-        concat_masked = torch.cat([video_feat_masked, audio_feat_masked], dim=-1)
-        memory_masked = self.model.fusion(concat_masked)
-        
-        if self.model.proj_decoder:
-            memory_masked = self.model.proj_decoder(memory_masked)
-        
-        # Teacher forcing with baseline tokens
-        with torch.no_grad():
-            ys_in_pad, ys_out_pad = add_sos_eos(
-                self.baseline_token_ids.unsqueeze(0).to(device),
-                self.model.sos,
-                self.model.eos,
-                self.model.ignore_id
-            )
-            
-            ys_mask = target_mask(ys_in_pad, self.model.ignore_id)
-            
-            pred_pad, _ = self.model.decoder(
-                ys_in_pad,
-                ys_mask,
-                memory_masked,
-                None
-            )
-            
-            # Extract logits for baseline tokens
-            logit_vec = []
-            for t, token_id in enumerate(self.baseline_token_ids):
-                if t < pred_pad.shape[1]:
-                    logit_vec.append(pred_pad[0, t, token_id].item())
-            
-            results.append(logit_vec)
-    
-    return np.array(results)
-
 class ModelModule(LightningModule):
     def __init__(self, cfg):
         super().__init__()
@@ -289,7 +68,229 @@ class ModelModule(LightningModule):
         predicted_token_id = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
         predicted = self.text_transform.post_process(predicted_token_id).replace("<eos>", "")
         return predicted
+    
+    
+    
+    def forward_shap_autoavsr(self, sample, nsamples=2000, shap_alg="kernel"):
+        """
+        Compute SHAP values for Auto-AVSR (decoder-only).
+        
+        Args:
+            sample: Single test sample containing 'video', 'audio', 'target'
+            nsamples: Number of SHAP samples (default 2000)
+            shap_alg: SHAP algorithm ('kernel' or 'permutation')
+        
+        Returns:
+            audio_pct_abs, video_pct_abs: Absolute SHAP contributions
+            audio_pct_pos, video_pct_pos: Positive SHAP contributions
+            audio_pct_neg, video_pct_neg: Negative SHAP contributions
+        """
+        
+        device = self.device
+        
+        # 1) Encode audio and video
+        video = sample["video"].unsqueeze(0).to(device)
+        audio = sample["audio"].unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            video_feat, _ = self.model.encoder(video, None)
+            audio_feat, _ = self.model.aux_encoder(audio, None)
+        
+        B, T_v, D_v = video_feat.shape
+        B, T_a, D_a = audio_feat.shape
+        
+        assert T_v == T_a, f"Video ({T_v}) and audio ({T_a}) must be temporally aligned!"
+        T = T_v
+        
+        # Define feature order (must match concatenation order)
+        N_v = T  # Video timesteps (first in concatenation)
+        N_a = T  # Audio timesteps (second in concatenation)
+        p = N_v + N_a  # Total features
+        
+        # Store for wrapper
+        self.video_feat_full = video_feat
+        self.audio_feat_full = audio_feat
+        
+        # 2) Generate baseline using decoder-only beam search
+        concat_full = torch.cat([video_feat, audio_feat], dim=-1)
+        memory_full = self.model.fusion(concat_full)
+        
+        if self.model.proj_decoder:
+            memory_full = self.model.proj_decoder(memory_full)
+        
+        with torch.no_grad():
+            beam_search = get_beam_search_decoder(
+                self.model,
+                self.token_list,
+                ctc_weight=0.0,
+                beam_size=40
+            )
+            
+            nbest_hyps = beam_search(memory_full.squeeze(0))
+            nbest_hyps = [h.asdict() for h in nbest_hyps[:min(len(nbest_hyps), 1)]]
+            baseline_token_ids = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
+        
+        self.baseline_token_ids = baseline_token_ids
+        
+        # Safety check
+        if len(baseline_token_ids) == 0:
+            raise ValueError("Baseline generation failed: no tokens generated")
+        
+        # 3) SHAP computation
+        background = np.zeros((1, p), dtype=np.float32)
+        x_explain = np.ones((1, p), dtype=np.float32)
+        
+        def shap_model(masks):
+            return self.shap_wrapper_autoavsr(masks)
+        
+        if shap_alg == "kernel":
+            explainer = shap.SamplingExplainer(
+                model=shap_model,
+                data=background
+            )
+            shap_values = explainer.shap_values(x_explain, nsamples=nsamples)
+            
+        elif shap_alg == "permutation":
+            from shap.maskers import Independent
+            masker = Independent(background, max_samples=100)
+            
+            explainer = shap.PermutationExplainer(
+                model=shap_model,
+                masker=masker,
+                algorithm='auto'
+            )
+            shap_obj = explainer(x_explain, max_evals=nsamples, silent=True)
+            shap_values = shap_obj.values
+        
+        else:
+            raise ValueError(f"Unknown SHAP algorithm: {shap_alg}")
+        
+        # Process SHAP output
+        if isinstance(shap_values, list):
+            shap_values = shap_values[0]
+        
+        shap_values = np.array(shap_values)
+        if shap_values.ndim == 3:
+            shap_values = shap_values[0]
+        
+        vals = shap_values  # (p, T_out)
+        
+        # 4) Compute contributions
+        # Absolute SHAP
+        mm_raw_abs = np.sum(np.abs(vals), axis=1)
+        mm_video_abs = mm_raw_abs[:N_v].sum()
+        mm_audio_abs = mm_raw_abs[N_v:].sum()
+        total_abs = mm_audio_abs + mm_video_abs
+        
+        audio_pct_abs = mm_audio_abs / total_abs
+        video_pct_abs = mm_video_abs / total_abs
+        
+        # Positive SHAP
+        mm_raw_pos = np.sum(np.maximum(vals, 0), axis=1)
+        mm_video_pos = mm_raw_pos[:N_v].sum()
+        mm_audio_pos = mm_raw_pos[N_v:].sum()
+        total_pos = mm_audio_pos + mm_video_pos
+        
+        audio_pct_pos = mm_audio_pos / total_pos
+        video_pct_pos = mm_video_pos / total_pos
+        
+        # Negative SHAP
+        mm_raw_neg = np.sum(np.minimum(vals, 0), axis=1)
+        mm_video_neg = abs(mm_raw_neg[:N_v].sum())
+        mm_audio_neg = abs(mm_raw_neg[N_v:].sum())
+        total_neg = mm_audio_neg + mm_video_neg
+        
+        audio_pct_neg = mm_audio_neg / total_neg
+        video_pct_neg = mm_video_neg / total_neg
+        
+        # Print results
+        print(f"Audio contribution (absolute): {audio_pct_abs*100:.2f}%")
+        print(f"Video contribution (absolute): {video_pct_abs*100:.2f}%")
+        print(f"Audio contribution (positive): {audio_pct_pos*100:.2f}%")
+        print(f"Video contribution (positive): {video_pct_pos*100:.2f}%")
+        print(f"Audio contribution (negative): {audio_pct_neg*100:.2f}%")
+        print(f"Video contribution (negative): {video_pct_neg*100:.2f}%")
+        
+        return audio_pct_abs, video_pct_abs, \
+               audio_pct_pos, video_pct_pos, \
+               audio_pct_neg, video_pct_neg
 
+    def shap_wrapper_autoavsr(self, masks):
+        """
+        SHAP wrapper for evaluating coalitions.
+        
+        Args:
+            masks: (n_coalitions, p) where p = N_v + N_a
+                   First N_v elements: video timestep masks
+                   Last N_a elements: audio timestep masks
+        
+        Returns:
+            results: (n_coalitions, T_out) logits for baseline tokens
+        """
+        if masks.ndim == 1:
+            masks = masks.reshape(1, -1)
+        
+        n_coalitions = masks.shape[0]
+        device = self.device
+        
+        T = self.video_feat_full.shape[1]
+        N_v = T  # Video timesteps (first in mask)
+        N_a = T  # Audio timesteps (second in mask)
+        
+        results = []
+        
+        for i in range(n_coalitions):
+            mask = masks[i]
+            
+            # Split mask (order: video first, audio second)
+            mask_video = mask[:N_v]
+            mask_audio = mask[N_v:]
+            
+            # Clone and mask features
+            audio_feat_masked = self.audio_feat_full.clone()
+            video_feat_masked = self.video_feat_full.clone()
+            
+            for t in range(T):
+                if mask_video[t] == 0:
+                    video_feat_masked[:, t, :] = 0
+                if mask_audio[t] == 0:
+                    audio_feat_masked[:, t, :] = 0
+            
+            # Concatenate (video first, audio second)
+            concat_masked = torch.cat([video_feat_masked, audio_feat_masked], dim=-1)
+            memory_masked = self.model.fusion(concat_masked)
+            
+            if self.model.proj_decoder:
+                memory_masked = self.model.proj_decoder(memory_masked)
+            
+            # Teacher forcing with baseline tokens
+            with torch.no_grad():
+                ys_in_pad, ys_out_pad = add_sos_eos(
+                    self.baseline_token_ids.unsqueeze(0).to(device),
+                    self.model.sos,
+                    self.model.eos,
+                    self.model.ignore_id
+                )
+                
+                ys_mask = target_mask(ys_in_pad, self.model.ignore_id)
+                
+                pred_pad, _ = self.model.decoder(
+                    ys_in_pad,
+                    ys_mask,
+                    memory_masked,
+                    None
+                )
+                
+                # Extract logits for baseline tokens
+                logit_vec = []
+                for t, token_id in enumerate(self.baseline_token_ids):
+                    if t < pred_pad.shape[1]:
+                        logit_vec.append(pred_pad[0, t, token_id].item())
+                
+                results.append(logit_vec)
+        
+        return np.array(results)
+    
     def training_step(self, batch, batch_idx):
         return self._step(batch, batch_idx, step_type="train")
 
