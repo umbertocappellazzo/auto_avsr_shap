@@ -299,6 +299,23 @@ class ModelModule(LightningModule):
 
     def test_step(self, sample, sample_idx):
         
+        video_feat, _ = self.model.encoder(sample["video"].unsqueeze(0).to(self.device), None)
+        audio_feat, _ = self.model.aux_encoder(sample["audio"].unsqueeze(0).to(self.device), None)
+        audiovisual_feat = self.model.fusion(torch.cat((video_feat, audio_feat), dim=-1))
+
+        audiovisual_feat = audiovisual_feat.squeeze(0)
+
+        nbest_hyps = self.beam_search(audiovisual_feat)
+        nbest_hyps = [h.asdict() for h in nbest_hyps[: min(len(nbest_hyps), 1)]]
+        predicted_token_id = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
+        predicted = self.text_transform.post_process(predicted_token_id).replace("<eos>", "")
+
+        token_id = sample["target"]
+        actual = self.text_transform.post_process(token_id)
+
+        self.total_edit_distance += compute_word_level_distance(actual, predicted)
+        self.total_length += len(actual.split())
+        
         audio_abs, video_abs, audio_pos, video_pos, audio_neg, video_neg = self.forward_shap_autoavsr(
                                                                                     sample, 
                                                                                     nsamples=2000,
@@ -339,6 +356,9 @@ class ModelModule(LightningModule):
 
     def on_test_epoch_start(self):
         
+        self.total_length = 0
+        self.total_edit_distance = 0
+        
         self.audio_shap_abs = []
         self.video_shap_abs = []
         self.audio_shap_pos = []
@@ -350,6 +370,8 @@ class ModelModule(LightningModule):
         self.beam_search = get_beam_search_decoder(self.model, self.token_list,  ctc_weight=0.) #, ctc_weight=0.
 
     def on_test_epoch_end(self):
+        
+        self.log("wer", self.total_edit_distance / self.total_length)
         
         overall_audio_abs = np.mean(self.audio_shap_abs)
         overall_video_abs = np.mean(self.video_shap_abs)
