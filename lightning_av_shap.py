@@ -302,7 +302,7 @@ class ModelModule(LightningModule):
         audio_abs, video_abs, audio_pos, video_pos, audio_neg, video_neg = self.forward_shap_autoavsr(
                                                                                     sample, 
                                                                                     nsamples=2000,
-                                                                                    shap_alg="kernel"
+                                                                                    shap_alg=self.cfg.decode.shap_alg
                                                                                 )
         self.audio_shap_abs.append(audio_abs)
         self.video_shap_abs.append(video_abs)
