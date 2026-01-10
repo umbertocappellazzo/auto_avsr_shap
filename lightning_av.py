@@ -65,6 +65,7 @@ class ModelModule(LightningModule):
 
     def test_step(self, sample, sample_idx):
         video_feat, _ = self.model.encoder(sample["video"].unsqueeze(0).to(self.device), None)
+        video_feat[:, :, :] = 0 
         audio_feat, _ = self.model.aux_encoder(sample["audio"].unsqueeze(0).to(self.device), None)
         audiovisual_feat = self.model.fusion(torch.cat((video_feat, audio_feat), dim=-1))
 
