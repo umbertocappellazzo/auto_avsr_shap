@@ -132,9 +132,6 @@ class ModelModule(LightningModule):
         
         self.baseline_token_ids = baseline_token_ids
         
-        baseline_clean = self.text_transform.post_process(baseline_token_ids).replace("<eos>", "")
-        print(f"Clean baseline: {baseline_clean}")
-        
         # Safety check
         if len(baseline_token_ids) == 0:
             raise ValueError("Baseline generation failed: no tokens generated")
