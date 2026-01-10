@@ -102,7 +102,9 @@ class ModelModule(LightningModule):
         assert T_v == T_a, f"Video ({T_v}) and audio ({T_a}) must be temporally aligned!"
         T = T_v
         
-        video_feat[:, :, :] = 0  # Zero ALL audio features
+        #If we wanna check what happens when we zero audi or video features.
+        
+        #video_feat[:, :, :] = 0  # Zero ALL audio features
         
         # Define feature order (must match concatenation order)
         N_v = T  # Video timesteps (first in concatenation)
