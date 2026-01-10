@@ -66,7 +66,7 @@ class ModelModule(LightningModule):
     def test_step(self, sample, sample_idx):
         video_feat, _ = self.model.encoder(sample["video"].unsqueeze(0).to(self.device), None)
         audio_feat, _ = self.model.aux_encoder(sample["audio"].unsqueeze(0).to(self.device), None)
-        video_feat[:, :, :] = 0 
+        #video_feat[:, :, :] = 0 
         audiovisual_feat = self.model.fusion(torch.cat((video_feat, audio_feat), dim=-1))
 
         audiovisual_feat = audiovisual_feat.squeeze(0)
@@ -76,8 +76,6 @@ class ModelModule(LightningModule):
         predicted_token_id = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
         predicted = self.text_transform.post_process(predicted_token_id).replace("<eos>", "")
 
-        print(predicted)
-        
         token_id = sample["target"]
         actual = self.text_transform.post_process(token_id)
 
