@@ -313,6 +313,9 @@ class ModelModule(LightningModule):
         nbest_hyps = [h.asdict() for h in nbest_hyps[: min(len(nbest_hyps), 1)]]
         predicted_token_id = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
         predicted = self.text_transform.post_process(predicted_token_id).replace("<eos>", "")
+        
+        
+        print(predicted)
 
         token_id = sample["target"]
         actual = self.text_transform.post_process(token_id)
