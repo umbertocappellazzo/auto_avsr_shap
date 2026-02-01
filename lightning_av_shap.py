@@ -18,6 +18,7 @@ from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.nets.scorers.ctc import CTCPrefixScorer
 
 import shap
+import os
 import numpy as np
 from espnet.nets.pytorch_backend.transformer.add_sos_eos import add_sos_eos
 from espnet.nets.pytorch_backend.transformer.mask import target_mask
@@ -217,7 +218,8 @@ class ModelModule(LightningModule):
         
         return audio_pct_abs, video_pct_abs, \
                audio_pct_pos, video_pct_pos, \
-               audio_pct_neg, video_pct_neg
+               audio_pct_neg, video_pct_neg, \
+               T_a, vals
 
     def shap_wrapper_autoavsr(self, masks):
         """
@@ -320,18 +322,32 @@ class ModelModule(LightningModule):
 
         # self.total_edit_distance += compute_word_level_distance(actual, predicted)
         # self.total_length += len(actual.split())
+        batch_size = len(sample["videos"])
         
-        audio_abs, video_abs, audio_pos, video_pos, audio_neg, video_neg = self.forward_shap_autoavsr(
+        audio_shap_abs_current, video_shap_abs_current, audio_shap_pos_current, video_shap_pos_current, audio_shap_neg_current, video_shap_neg_current, num_audio_tokens, shapley_values = self.forward_shap_autoavsr(
                                                                                     sample, 
                                                                                     nsamples=2000,
                                                                                     shap_alg=self.cfg.decode.shap_alg
                                                                                 )
-        self.audio_shap_abs.append(audio_abs)
-        self.video_shap_abs.append(video_abs)
-        self.audio_shap_pos.append(audio_pos)
-        self.video_shap_pos.append(video_pos)
-        self.audio_shap_neg.append(audio_neg)
-        self.video_shap_neg.append(video_neg)
+        self.audio_shap_abs.append(audio_shap_abs_current)
+        self.video_shap_abs.append(video_shap_abs_current)
+        self.audio_shap_pos.append(audio_shap_pos_current)
+        self.video_shap_pos.append(video_shap_pos_current)
+        self.audio_shap_neg.append(audio_shap_neg_current)
+        self.video_shap_neg.append(video_shap_neg_current)
+        self.num_audio_tokens.append(num_audio_tokens)
+        self.shapley_values.append(shapley_values)
+        
+        self.log("sample-audio-ABS-SHAP", audio_shap_abs_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-video-ABS-SHAP", video_shap_abs_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-audio-POS-SHAP", audio_shap_pos_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-video-POS-SHAP", video_shap_pos_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-audio-NEG-SHAP", audio_shap_neg_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-video-NEG-SHAP", video_shap_neg_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-num-audio-tokens", num_audio_tokens, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        
+        
+        
 
     def _step(self, batch, batch_idx, step_type):
         loss, loss_ctc, loss_att, acc = self.model(batch["videos"], batch["audios"], batch["video_lengths"], batch["audio_lengths"], batch["targets"])
@@ -370,6 +386,15 @@ class ModelModule(LightningModule):
         self.video_shap_pos = []
         self.audio_shap_neg = []
         self.video_shap_neg = []
+        self.num_audio_tokens = []
+        self.shapley_values = []
+       
+        self.output_file = os.path.join(
+           self.cfg.decode.output_path,
+           self.cfg.decode.exp_name
+           
+        )
+        print("Output dir: ", self.output_file)
         
         self.text_transform = TextTransform()
         self.beam_search = get_beam_search_decoder(self.model, self.token_list,  ctc_weight=0.) #, ctc_weight=0.
@@ -384,13 +409,20 @@ class ModelModule(LightningModule):
         overall_video_pos = np.mean(self.video_shap_pos)
         overall_audio_neg = np.mean(self.audio_shap_neg)
         overall_video_neg = np.mean(self.video_shap_neg)
+        overall_num_audio_tokens = np.mean(self.num_audio_tokens)
+        
+        std_overall_audio_abs = np.std(self.audio_shap_abs)
+        std_overall_video_abs = np.std(self.video_shap_abs)
 
         self.log("audio-ABS-SHAP", overall_audio_abs)
         self.log("video-ABS-SHAP", overall_video_abs)
+        self.log("STD_audio-POS-SHAP", std_overall_audio_abs)
+        self.log("STD_video-POS-SHAP", std_overall_video_abs)
         self.log("audio-POS-SHAP", overall_audio_pos)
         self.log("video-POS-SHAP", overall_video_pos)
         self.log("audio-NEG-SHAP", overall_audio_neg)
         self.log("video-NEG-SHAP", overall_video_neg)
+        self.log("num-audio-tokens", overall_num_audio_tokens)
     
         print("Global Audio-ABS-SHAP :", overall_audio_abs * 100, "%")
         print("Global Video-ABS-SHAP :", overall_video_abs * 100, "%")
@@ -398,6 +430,20 @@ class ModelModule(LightningModule):
         print("Global Video-POS-SHAP :", overall_video_pos * 100, "%")
         print("Global Audio-NEG-SHAP :", overall_audio_neg * 100, "%")
         print("Global Video-NEG-SHAP :", overall_video_neg * 100, "%")
+        
+        np.savez_compressed(
+                self.output_file,
+                # Aggregated metrics
+                audio_abs=np.array(self.audio_shap_abs),
+                video_abs=np.array(self.video_shap_abs),
+                audio_pos=np.array(self.audio_shap_pos),
+                video_pos=np.array(self.video_shap_pos),
+                audio_neg=np.array(self.audio_shap_neg),
+                video_neg=np.array(self.video_shap_neg),
+                num_audio_tokens=np.array(self.num_audio_tokens),
+                # Raw SHAP values (ragged array - stored as object array)
+                shap_values=np.array(self.shapley_values, dtype=object),
+            )
 
 
 def get_beam_search_decoder(model, token_list, ctc_weight=0.1, beam_size=40):

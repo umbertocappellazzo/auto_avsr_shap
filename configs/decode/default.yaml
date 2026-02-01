@@ -1,4 +1,5 @@
 name: default
 exp_name:
+output_path:
 shap_alg:
 snr_target: 999999
