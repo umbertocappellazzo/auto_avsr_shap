@@ -322,7 +322,6 @@ class ModelModule(LightningModule):
 
         # self.total_edit_distance += compute_word_level_distance(actual, predicted)
         # self.total_length += len(actual.split())
-        batch_size = len(sample["videos"])
         
         audio_shap_abs_current, video_shap_abs_current, audio_shap_pos_current, video_shap_pos_current, audio_shap_neg_current, video_shap_neg_current, num_audio_tokens, shapley_values = self.forward_shap_autoavsr(
                                                                                     sample, 
@@ -338,13 +337,13 @@ class ModelModule(LightningModule):
         self.num_audio_tokens.append(num_audio_tokens)
         self.shapley_values.append(shapley_values)
         
-        self.log("sample-audio-ABS-SHAP", audio_shap_abs_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-video-ABS-SHAP", video_shap_abs_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-audio-POS-SHAP", audio_shap_pos_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-video-POS-SHAP", video_shap_pos_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-audio-NEG-SHAP", audio_shap_neg_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-video-NEG-SHAP", video_shap_neg_current, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
-        self.log("sample-num-audio-tokens", num_audio_tokens, on_step=True, on_epoch=False, batch_size=batch_size, prog_bar=False)
+        self.log("sample-audio-ABS-SHAP", audio_shap_abs_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-video-ABS-SHAP", video_shap_abs_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-audio-POS-SHAP", audio_shap_pos_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-video-POS-SHAP", video_shap_pos_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-audio-NEG-SHAP", audio_shap_neg_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-video-NEG-SHAP", video_shap_neg_current, on_step=True, on_epoch=False, prog_bar=False)
+        self.log("sample-num-audio-tokens", num_audio_tokens, on_step=True, on_epoch=False, prog_bar=False)
         
         
         
