@@ -2,4 +2,6 @@ name: default
 exp_name:
 output_path:
 shap_alg:
+wand_project:
+num_samples_shap: 2000
 snr_target: 999999

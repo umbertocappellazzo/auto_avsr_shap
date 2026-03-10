@@ -273,7 +273,7 @@ class ModelModule(LightningModule):
         
         audio_shap_abs_current, video_shap_abs_current, num_audio_tokens, shapley_values = self.forward_shap_autoavsr(
                                                                                     sample, 
-                                                                                    nsamples=2000,
+                                                                                    nsamples=self.cfg.decode.num_samples_shap,
                                                                                     shap_alg=self.cfg.decode.shap_alg
                                                                                     )
         self.audio_shap_abs.append(audio_shap_abs_current)

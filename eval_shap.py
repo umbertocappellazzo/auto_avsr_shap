@@ -23,7 +23,7 @@ def main(cfg):
         from lightning_av_shap import ModelModule
     modelmodule = ModelModule(cfg)
     datamodule = DataModule(cfg)
-    trainer = Trainer(num_nodes=1, gpus=1, logger=WandbLogger(name=cfg.decode.exp_name, project="Llama-AVSR"))
+    trainer = Trainer(num_nodes=1, gpus=1, logger=WandbLogger(name=cfg.decode.exp_name, project=cfg.decode.wandb_project))
     # Training and testing
     modelmodule.model.load_state_dict(torch.load(cfg.pretrained_model_path, map_location=lambda storage, loc: storage))
     trainer.test(model=modelmodule, datamodule=datamodule)
