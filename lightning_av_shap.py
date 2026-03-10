@@ -76,15 +76,6 @@ class ModelModule(LightningModule):
         """
         Compute SHAP values for Auto-AVSR (decoder-only).
         
-        Args:
-            sample: Single test sample containing 'video', 'audio', 'target'
-            nsamples: Number of SHAP samples (default 2000)
-            shap_alg: SHAP algorithm ('kernel' or 'permutation')
-        
-        Returns:
-            audio_pct_abs, video_pct_abs: Absolute SHAP contributions
-            audio_pct_pos, video_pct_pos: Positive SHAP contributions
-            audio_pct_neg, video_pct_neg: Negative SHAP contributions
         """
         
         device = self.device
@@ -103,7 +94,7 @@ class ModelModule(LightningModule):
         assert T_v == T_a, f"Video ({T_v}) and audio ({T_a}) must be temporally aligned!"
         T = T_v
         
-        #If we wanna check what happens when we zero audi or video features.
+        #If we wanna check what happens when we zero audio or video features.
         
         #video_feat[:, :, :] = 0  # Zero ALL audio features
         
@@ -148,7 +139,7 @@ class ModelModule(LightningModule):
         def shap_model(masks):
             return self.shap_wrapper_autoavsr(masks)
         
-        if shap_alg == "kernel":
+        if shap_alg == "sampling":
             explainer = shap.SamplingExplainer(
                 model=shap_model,
                 data=background
@@ -181,7 +172,7 @@ class ModelModule(LightningModule):
         vals = shap_values  # (p, T_out)
         
         # 4) Compute contributions
-        # Absolute SHAP
+       
         mm_raw_abs = np.sum(np.abs(vals), axis=1)
         mm_video_abs = mm_raw_abs[:N_v].sum()
         mm_audio_abs = mm_raw_abs[N_v:].sum()
@@ -190,35 +181,11 @@ class ModelModule(LightningModule):
         audio_pct_abs = mm_audio_abs / total_abs
         video_pct_abs = mm_video_abs / total_abs
         
-        # Positive SHAP
-        mm_raw_pos = np.sum(np.maximum(vals, 0), axis=1)
-        mm_video_pos = mm_raw_pos[:N_v].sum()
-        mm_audio_pos = mm_raw_pos[N_v:].sum()
-        total_pos = mm_audio_pos + mm_video_pos
-        
-        audio_pct_pos = mm_audio_pos / total_pos
-        video_pct_pos = mm_video_pos / total_pos
-        
-        # Negative SHAP
-        mm_raw_neg = np.sum(np.minimum(vals, 0), axis=1)
-        mm_video_neg = abs(mm_raw_neg[:N_v].sum())
-        mm_audio_neg = abs(mm_raw_neg[N_v:].sum())
-        total_neg = mm_audio_neg + mm_video_neg
-        
-        audio_pct_neg = mm_audio_neg / total_neg
-        video_pct_neg = mm_video_neg / total_neg
-        
         # Print results
         print(f"Audio contribution (absolute): {audio_pct_abs*100:.2f}%")
         print(f"Video contribution (absolute): {video_pct_abs*100:.2f}%")
-        print(f"Audio contribution (positive): {audio_pct_pos*100:.2f}%")
-        print(f"Video contribution (positive): {video_pct_pos*100:.2f}%")
-        print(f"Audio contribution (negative): {audio_pct_neg*100:.2f}%")
-        print(f"Video contribution (negative): {video_pct_neg*100:.2f}%")
         
         return audio_pct_abs, video_pct_abs, \
-               audio_pct_pos, video_pct_pos, \
-               audio_pct_neg, video_pct_neg, \
                T_a, vals
 
     def shap_wrapper_autoavsr(self, masks):
@@ -241,7 +208,6 @@ class ModelModule(LightningModule):
         
         T = self.video_feat_full.shape[1]
         N_v = T  # Video timesteps (first in mask)
-        N_a = T  # Audio timesteps (second in mask)
         
         results = []
         
@@ -305,48 +271,19 @@ class ModelModule(LightningModule):
 
     def test_step(self, sample, sample_idx):
         
-        # video_feat, _ = self.model.encoder(sample["video"].unsqueeze(0).to(self.device), None)
-        # audio_feat, _ = self.model.aux_encoder(sample["audio"].unsqueeze(0).to(self.device), None)
-        # audiovisual_feat = self.model.fusion(torch.cat((video_feat, audio_feat), dim=-1))
-
-        # audiovisual_feat = audiovisual_feat.squeeze(0)
-
-        # nbest_hyps = self.beam_search(audiovisual_feat)
-        # nbest_hyps = [h.asdict() for h in nbest_hyps[: min(len(nbest_hyps), 1)]]
-        # predicted_token_id = torch.tensor(list(map(int, nbest_hyps[0]["yseq"][1:])))
-        # predicted = self.text_transform.post_process(predicted_token_id).replace("<eos>", "")
-        
-
-        # token_id = sample["target"]
-        # actual = self.text_transform.post_process(token_id)
-
-        # self.total_edit_distance += compute_word_level_distance(actual, predicted)
-        # self.total_length += len(actual.split())
-        
-        audio_shap_abs_current, video_shap_abs_current, audio_shap_pos_current, video_shap_pos_current, audio_shap_neg_current, video_shap_neg_current, num_audio_tokens, shapley_values = self.forward_shap_autoavsr(
+        audio_shap_abs_current, video_shap_abs_current, num_audio_tokens, shapley_values = self.forward_shap_autoavsr(
                                                                                     sample, 
                                                                                     nsamples=2000,
                                                                                     shap_alg=self.cfg.decode.shap_alg
-                                                                                )
+                                                                                    )
         self.audio_shap_abs.append(audio_shap_abs_current)
         self.video_shap_abs.append(video_shap_abs_current)
-        self.audio_shap_pos.append(audio_shap_pos_current)
-        self.video_shap_pos.append(video_shap_pos_current)
-        self.audio_shap_neg.append(audio_shap_neg_current)
-        self.video_shap_neg.append(video_shap_neg_current)
         self.num_audio_tokens.append(num_audio_tokens)
         self.shapley_values.append(shapley_values)
         
         self.log("sample-audio-ABS-SHAP", audio_shap_abs_current, on_step=True, on_epoch=False, prog_bar=False)
         self.log("sample-video-ABS-SHAP", video_shap_abs_current, on_step=True, on_epoch=False, prog_bar=False)
-        self.log("sample-audio-POS-SHAP", audio_shap_pos_current, on_step=True, on_epoch=False, prog_bar=False)
-        self.log("sample-video-POS-SHAP", video_shap_pos_current, on_step=True, on_epoch=False, prog_bar=False)
-        self.log("sample-audio-NEG-SHAP", audio_shap_neg_current, on_step=True, on_epoch=False, prog_bar=False)
-        self.log("sample-video-NEG-SHAP", video_shap_neg_current, on_step=True, on_epoch=False, prog_bar=False)
         self.log("sample-num-audio-tokens", num_audio_tokens, on_step=True, on_epoch=False, prog_bar=False)
-        
-        
-        
 
     def _step(self, batch, batch_idx, step_type):
         loss, loss_ctc, loss_att, acc = self.model(batch["videos"], batch["audios"], batch["video_lengths"], batch["audio_lengths"], batch["targets"])
@@ -376,15 +313,8 @@ class ModelModule(LightningModule):
 
     def on_test_epoch_start(self):
         
-        #self.total_length = 0
-        #self.total_edit_distance = 0
-        
         self.audio_shap_abs = []
         self.video_shap_abs = []
-        self.audio_shap_pos = []
-        self.video_shap_pos = []
-        self.audio_shap_neg = []
-        self.video_shap_neg = []
         self.num_audio_tokens = []
         self.shapley_values = []
        
@@ -396,18 +326,14 @@ class ModelModule(LightningModule):
         print("Output dir: ", self.output_file)
         
         self.text_transform = TextTransform()
-        self.beam_search = get_beam_search_decoder(self.model, self.token_list,  ctc_weight=0.) #, ctc_weight=0.
+        
+        # We do not decode using CTC. I observed little variations by dropping it.
+        self.beam_search = get_beam_search_decoder(self.model, self.token_list,  ctc_weight=0.)
 
     def on_test_epoch_end(self):
         
-        #self.log("wer", self.total_edit_distance / self.total_length)
-        
         overall_audio_abs = np.mean(self.audio_shap_abs)
         overall_video_abs = np.mean(self.video_shap_abs)
-        overall_audio_pos = np.mean(self.audio_shap_pos)
-        overall_video_pos = np.mean(self.video_shap_pos)
-        overall_audio_neg = np.mean(self.audio_shap_neg)
-        overall_video_neg = np.mean(self.video_shap_neg)
         overall_num_audio_tokens = np.mean(self.num_audio_tokens)
         
         std_overall_audio_abs = np.std(self.audio_shap_abs)
@@ -415,20 +341,12 @@ class ModelModule(LightningModule):
 
         self.log("audio-ABS-SHAP", overall_audio_abs)
         self.log("video-ABS-SHAP", overall_video_abs)
-        self.log("STD_audio-POS-SHAP", std_overall_audio_abs)
-        self.log("STD_video-POS-SHAP", std_overall_video_abs)
-        self.log("audio-POS-SHAP", overall_audio_pos)
-        self.log("video-POS-SHAP", overall_video_pos)
-        self.log("audio-NEG-SHAP", overall_audio_neg)
-        self.log("video-NEG-SHAP", overall_video_neg)
+        self.log("STD_audio-ABS-SHAP", std_overall_audio_abs)
+        self.log("STD_video-ABS-SHAP", std_overall_video_abs)
         self.log("num-audio-tokens", overall_num_audio_tokens)
     
         print("Global Audio-ABS-SHAP :", overall_audio_abs * 100, "%")
         print("Global Video-ABS-SHAP :", overall_video_abs * 100, "%")
-        print("Global Audio-POS-SHAP :", overall_audio_pos * 100, "%")
-        print("Global Video-POS-SHAP :", overall_video_pos * 100, "%")
-        print("Global Audio-NEG-SHAP :", overall_audio_neg * 100, "%")
-        print("Global Video-NEG-SHAP :", overall_video_neg * 100, "%")
         
         np.savez_compressed(
                 self.output_file,
