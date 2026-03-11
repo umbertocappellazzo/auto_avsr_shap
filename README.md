@@ -6,7 +6,7 @@ This repository contains the code to compute the audio/video SHAP contributions 
 
 ## Requirements
 
-To setup the environment and pre-process the LRS2/LRS3 datasets, please refer to the official [`Auto-AVSR repository`](https://github.com/mpc001/auto_avsr) with all the details. Once this is done, make sure to install the **shap** library: ```pip install shap```. In addition to this, download the [`Auto-AVSR checkpoint`](https://drive.google.com/file/d/1mU6MHzXMiq1m6GI-8gqT2zc2bdStuBXu/view) we used in our manuscript. The ckpt we used is the one trained on LRW, LRS2, LRS3, VoxCeleb2, AVSpeech (around 3448 hours).  
+To setup the environment and pre-process the LRS2/LRS3 datasets, please refer to the official [`Auto-AVSR repository`](https://github.com/mpc001/auto_avsr) with all the details. Once this is done, make sure to install the **shap** and **wandb** libraries: ```pip install shap wandb==0.15.12```. In addition to this, download the [`Auto-AVSR checkpoint`](https://drive.google.com/file/d/1mU6MHzXMiq1m6GI-8gqT2zc2bdStuBXu/view) we used in our manuscript. The ckpt we used is the one trained on LRW, LRS2, LRS3, VoxCeleb2, AVSpeech (around 3448 hours).  
 
 ## Compute the global A/V-SHAP Contributions.
 
